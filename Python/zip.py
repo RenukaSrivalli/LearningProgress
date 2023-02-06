@@ -1,0 +1,10 @@
+names=["renu","anil","siva"]
+age=[19,20,18]
+ans=zip(names,age)
+print(dict(ans))
+a=names+age
+print(a)
+names.append(age)
+print(names)
+names.extend(age)
+print(names)

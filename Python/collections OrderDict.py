@@ -1,0 +1,19 @@
+from collections import OrderedDict
+dict={};
+dict[1]='r'
+dict[2]='e'
+dict[3]='n'
+dict[5]='k'
+dict[4]='u'
+dict[6]='a'
+print(dict)
+d=OrderedDict()
+d[1]='r'
+d[2]='e'
+d[3]='n'
+d[5]='k'
+d[4]='u'
+d[6]='a'
+print(d)
+print(d.keys())
+print(d.values())

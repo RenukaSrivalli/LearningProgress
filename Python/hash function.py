@@ -1,0 +1,10 @@
+val=4;
+a=4
+str="Renuka"
+str1="Renuka"
+x=24.4
+print(hash(val))
+print(hash(a))
+print(hash(str))
+print(hash(str1))
+print(hash(x))
