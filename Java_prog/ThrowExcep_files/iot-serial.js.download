@@ -1,0 +1,319 @@
+var ctAvrgirl;
+var ctPort;
+var textEncoder = new TextEncoder();
+var textDecoder = new TextDecoder();
+
+var requestOptions = {
+    // Filter on devices with the Arduino USB vendor ID.
+    filters: [{ vendorId: 0x2341 }],
+};
+
+async function requestNewPort() {
+    ctPort = await navigator.serial.requestPort();
+    connectToPort();
+}
+
+async function connectToPort() {
+    if (!ctPort) {
+        return;
+    }
+
+    var options = {
+        baudrate: parseInt($('#baudeRateSelect').val()),
+    };
+    await ctPort.open(options);
+
+    while (ctPort.readable) {
+        try {
+            var ctPortReader = ctPort.readable.getReader();
+            while (true) {
+                const {value, done} = await ctPortReader.read();
+                if (done) {
+                    console.log('[readLoop] DONE', done);
+                    ctPortReader.releaseLock();
+                    break;
+                }
+                $('.iot-serial-outputbox').append(textDecoder.decode(value));
+                console.log(textDecoder.decode(value));
+            }
+            ctPortReader = undefined;
+        } catch (e) {
+            console.log(e.message)
+        }
+    }
+
+    port = undefined;
+}
+
+function flashBoardWithHex(filecontents) {
+    var board = "uno";
+    var baudrate = 9600;
+    ctAvrgirl = new AvrgirlArduino({
+        board: board,
+        debug: true,
+        baudrate : baudrate
+    });
+
+    ctAvrgirl.flash(filecontents, function (error) {
+        if (error) {
+            console.error(error);
+            alertify.error("Error while flashing the board. Please try again", 8);
+            enableSubmit();
+            if (ctAvrgirl.connection.serialPort.isOpen) {
+                ctAvrgirl.connection.serialPort.close();
+            }
+        } else {
+            console.info('done.');
+            alertify.success("Flash complete.", 5);
+            $('#iotFlashLi').addClass('active');
+            $('#iotDevicesDiv').hide();
+            $('#IoTSerialDiv').show();
+        }
+    });
+}
+
+function executeFileForIoT(selectedQuestionTypeText, templateDivId) {
+    var previewBrowserClass = "previewBrowserClass";
+    var fileName = "";
+    var fileContent = "";
+    if (selectedQuestionTypeText == 'Copy Writing') {
+        var statusObj = areFileNamesValidForIoT("copyWritingUl");
+        if (statusObj.result != 0) {
+            alertify.error(statusObj.msg, 8);
+            $("#" + statusObj["elemId"]).toggle('highlight');
+            $("#" + statusObj["elemId"]).toggle('highlight');
+            logResponseOnSubmit("invalidFileNameIoT", statusObj.msg, statusObj.result);
+            return;
+        }
+        //copyWritingEditor-1492095814273
+        //copyWritingFileNameSpan-1492095814273
+
+        if (templateDivId == "") {
+            //if there Execute Btn was clicked in the authoring mode..
+            //fetch the tab which has the main file
+            var mainFileName = $('#mainFileName').val().trim();
+            if (mainFileName == "") {
+                alertify.error("Main File Name cannot be empty!", 8);
+                $('#mainFileName').toggle('highlight');
+                $('#mainFileName').toggle('highlight');
+                return;
+            }
+
+            if (!statusObj.tempFileNamesMap.hasOwnProperty(mainFileName)) {
+                alertify.error("Main File Name : " + mainFileName + " must be one of the files in the question.", 8);
+                $('#mainFileName').toggle('highlight');
+                $('#mainFileName').toggle('highlight');
+                return;
+            }
+
+            $('#copyWritingUl').find('input').filter(':text').each(function(idx, elem) {
+                if ($(elem).val() == mainFileName) {
+                    templateDivId = $(elem).attr('id');
+                    templateDivId = 'copyWritingEditor-' + templateDivId.split('-')[1];
+                }
+            });
+        }
+        var fileId = templateDivId === null ? statusObj['elemId'].split('-')[1] : templateDivId.split('-')[1];
+
+        if (templateDivId == null) {
+            fileName = $('#copyWritingEditor-' + fileId).attr('filename');
+            fileContent = $('#copyWritingEditor-' + fileId).data("editor").getSession().getValue();
+        } else {
+            fileName = $('#copyWritingFileNameSpan-' + fileId).val();
+            fileContent = $("#" + templateDivId).data("editor").getSession().getValue();
+        }
+    } else if( "Compilation Errors" == selectedQuestionTypeText)  {
+        var statusObj = areFileNamesValidForIoT("compilationErrorUl");
+        if (statusObj.result != 0) {
+            alertify.error(statusObj.msg, 8);
+            $("#" + statusObj["elemId"]).toggle('highlight');
+            $("#" + statusObj["elemId"]).toggle('highlight');
+            logResponseOnSubmit("compilationError", statusObj.msg, statusObj.result);
+            return;
+        }
+        var prefixText =  'compilationError';
+        var fileId = templateDivId === null ? statusObj['elemId'].split('-')[1] : templateDivId.split('-')[1];
+        if (templateDivId == null) {
+            fileName = $('#compilationErrorEditor-' + fileId).attr('filename');
+            fileContent = $('#compilationErrorEditor-' + fileId).data("editor").getSession().getValue();
+        } else {
+            var index = templateDivId.substring(templateDivId.indexOf('-') + 1);
+            fileName = $('#' + prefixText + 'Li-' + index).find('input').val().trim();
+            fileContent = $("#" + templateDivId).data("editor").getSession().getValue();
+        }
+
+    }
+    saveContentForIoT(fileName, fileContent, true, previewBrowserClass, selectedQuestionTypeText)
+}
+var hex;
+function saveContentForIoT(fileName, fileContent, callExecute, previewBrowserClass, selectedQuestionTypeText) {
+    var filesArr = [];
+    filesArr.push({"fileName" : fileName, "fileContent" : fileContent});
+    var url = '/secure/rest/ioths/scfiot';
+    var questionNo = getCurrentQ().questionNo;
+    var mainFileName = "";
+    if (getCTMode() == 0) { //if in authoring mode
+        var fileNameElemId = 'mainFileName';
+        if ("Copy Writing" != selectedQuestionTypeText) {
+            //in compilationError mode
+            fileNameElemId = 'correctContentMainFileName';
+        }
+        mainFileName = $('#' + fileNameElemId).val().trim();
+
+        if (mainFileName == "") {
+            alertify.error("Main File Name should be provided.", 7);
+            logResponseOnSubmit("invalidFileNameIoT", "Main File Name should be provided.", "");
+            $('#' + fileNameElemId).focus();
+            return;
+        }
+    } else {
+        //in learn/revise/self-test
+        mainFileName = getCurrentQ().mainFileName;
+    }
+
+    console.log("questionNo " + questionNo);
+    var request = $.ajax({
+        url: url + "?cookieId=" + cookieId ,
+        type: "POST",
+        headers : jsonHeaders,
+        //dataType: 'application/json', // it is for supporting crossdomain
+        crossDomain : true,
+        asynchronous: false,
+        /* jsonpCallback: 'deadCode' */
+        timeout: 20000, // set a timeout in milliseconds
+        data: JSON.stringify({"filesArr" : filesArr, "questionNo" : questionNo, "mainFileName": mainFileName})
+    });
+    request.done(function(res) {
+        if (res.result == 0 ) {
+            $('#iotErrorDiv pre').hide();
+            $('#IotCompilationErrorDiv').hide();
+            $('#IoTUploadDiv').hide();
+            $('#IoTSerialDiv').hide();
+            $('#IoTLearnContainerDiv').hide();
+            var responseJson = JSON.parse(res.msg);
+            var result = responseJson.response.result;
+            var responseText = responseJson.response.msg;
+            if (result == 0) {
+                $('#IoTLearnContainerDiv').show();
+                //on successful save on the disk, if there is postSaveFunction, call it
+                //this is usually used to call execute on submitClicked
+                responseText = "Compiled Successfully (" + responseText + ") files.";
+                if (filesArr.length == 1) {
+                    $('#IoTUploadDiv').show();
+                    responseText = "Successfully compiled " + fileName;
+                    hex = responseJson.response.hexValue;
+                }
+                alertify.success(responseText, 5);
+                //Log event to save success message after successful test cases verification.
+                logResponseOnSubmit("successOnSubmit", responseText, "");
+            } else if (result  == -1) {
+                $('#iotErrorDiv').show();
+                $('#iotErrorDiv pre').show();
+                $('#iotErrorDiv pre').html(responseJson.response.message);
+                $('#IoTLearnContainerDiv').show();
+                $('#IoTLearnContainerDiv').css("height", "386px");
+                $('#IotCompilationErrorDiv').show();
+                $('#IotCompilationErrorDiv').html(responseJson.response.message);
+                alertify.error("Error Saving. There is a compilation error", 8);
+                logResponseOnSubmit("compilationError", "Error Saving. There is a compilation error", result);
+            } else {
+                if (result == -2) {
+                    responseText = "Error Saving. Unable to create the context dir :" + responseText;
+                } else if (result == -3) {
+                    responseText = "Error Saving. Unable to write to file :" + responseText;
+                }
+                $('#IotCompilationErrorDiv').show();
+                $('#IotCompilationErrorDiv').html(responseJson.response.message);
+                alertify.error(responseText + "\n\nPlease contact support@codetantra.com if the problem persists.", 8);
+                logResponseOnSubmit("saveFailed", responseText, result);
+            }
+        }  else {
+            var responseText = res.msg;
+            if (res.result == -2 || res.result == -3) {
+                responseText = responseText;
+
+            } else if (res.result == -4) {
+                responseText = res.msg;
+                if (getCTMode() != 0) {
+                    enableSubmit();
+                }
+            } else {
+                responseText = "Unknow Error : ErrorCode : -212291. \n";
+            }
+            alertify.error(responseText + "\n\nPlease contact support@codetantra.com if the problem persists.", 8);
+            logResponseOnSubmit("saveFailed", responseText, res.result);
+        }
+    });
+    request.fail(function(res) {
+        alertify.error("Error Saving. Please contact support@codetantra.com if the problem persists.", 8);
+        logResponseOnSubmit("requestFailed", "Request to save file failed", res.result);
+    });
+}
+function areFileNamesValidForIoT(parentULId) {
+    var statusObj = {"result" : 0, "msg" : "", "fileName" : ""};
+    var tempFileNamesMap = {};
+    statusObj["tempFileNamesMap"] = tempFileNamesMap;
+    $('#' + parentULId).find('input').filter(':text').each(function(idx, elem){
+        statusObj["elemId"] = $(elem).attr("id");
+        var fileName = $(elem).val().trim();
+        if (fileName == "") {
+            statusObj.msg = "File Name cannot be empty.";
+            statusObj.result = -1;
+            return false;
+        }
+        statusObj.fileName = fileName;
+        if (fileName.endsWith("\\") || fileName.endsWith("/")) {
+            statusObj.msg = "Invalid File Name : " + fileName + ". File names cannot end with \\ or / characters.";
+            statusObj.result = -2;
+            return false;
+        }
+
+        if (fileName.endsWith(".ino")) {
+            if (tempFileNamesMap.hasOwnProperty(fileName)) {
+                statusObj.msg = "File Name : " + fileName + " already exists.";
+                statusObj.result = -4;
+                return false;
+            } else {
+                tempFileNamesMap[fileName] = fileName;
+            }
+        } else {
+            //for all other types like html, jsp, .css, etc
+            if (tempFileNamesMap.hasOwnProperty(fileName)) {
+                statusObj.msg = "File Name : " + fileName + " already exists.";
+                statusObj.result = -4;
+                return false;
+            } else {
+                tempFileNamesMap[fileName] = fileName;
+            }
+        }
+    });
+    return statusObj;
+}
+
+function writeDataToBoard() {
+    var data = $("#writeDataText").val();
+    var bytes = textEncoder.encode(data);
+    if (ctPort && ctPort.writable) {
+        var ctPortWriter = ctPort.writable.getWriter();
+        ctPortWriter.write(bytes);
+        ctPortWriter.releaseLock();
+    }
+}
+
+$('#uploadToIoTDeviceBtn').on('click', function () {
+    flashBoardWithHex(hex);
+});
+
+$('#serialMonitorConnectBtn').on('click', function () {
+    requestNewPort();
+    $("#serialMonitorDisconnectBtn").show();
+    $("#serialMonitorConnectBtn").hide();
+    $('#iotConnectToPortLi').addClass('active');
+
+});
+
+$('#serialMonitorDisconnectBtn').on('click', function () {
+    ctPort.close();
+    $("#serialMonitorConnectBtn").show();
+    $("#serialMonitorDisconnectBtn").hide();
+});
